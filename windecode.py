@@ -1,112 +1,135 @@
+# windecode_ultimate.py
+# A massive standalone Windows ISO decoder script with support for ALL major versions
+
 import argparse
 import re
 
-# === Lookup Tables ===
+# === Full Windows Build Map ===
+build_map = {
+    "10240": {"Name": "Windows 10 RTM", "Codename": "Threshold 1", "Release": "2015-07-29"},
+    "10586": {"Name": "Windows 10 November Update", "Codename": "Threshold 2", "Release": "2015-11-10"},
+    "14393": {"Name": "Windows 10 Anniversary Update / Server 2016", "Codename": "Redstone 1", "Release": "2016-08-02"},
+    "15063": {"Name": "Windows 10 Creators Update", "Codename": "Redstone 2", "Release": "2017-04-05"},
+    "16299": {"Name": "Windows 10 Fall Creators Update", "Codename": "Redstone 3", "Release": "2017-10-17"},
+    "17134": {"Name": "Windows 10 April 2018 Update", "Codename": "Redstone 4", "Release": "2018-04-30"},
+    "17763": {"Name": "Windows 10 October 2018 / Server 2019", "Codename": "Redstone 5", "Release": "2018-10-02"},
+    "18362": {"Name": "Windows 10 May 2019 Update", "Codename": "19H1", "Release": "2019-05-21"},
+    "18363": {"Name": "Windows 10 November 2019 Update", "Codename": "19H2", "Release": "2019-11-12"},
+    "19041": {"Name": "Windows 10 May 2020 Update", "Codename": "20H1", "Release": "2020-05-27"},
+    "19042": {"Name": "Windows 10 October 2020 Update", "Codename": "20H2", "Release": "2020-10-20"},
+    "19043": {"Name": "Windows 10 May 2021 Update", "Codename": "21H1", "Release": "2021-05-18"},
+    "19044": {"Name": "Windows 10 November 2021 Update", "Codename": "21H2", "Release": "2021-11-16"},
+    "19045": {"Name": "Windows 10 22H2", "Codename": "22H2", "Release": "2022-10-18"},
+    "22000": {"Name": "Windows 11 21H2", "Codename": "Sun Valley 1", "Release": "2021-10-05"},
+    "22621": {"Name": "Windows 11 22H2", "Codename": "Sun Valley 2", "Release": "2022-09-20"},
+    "22631": {"Name": "Windows 11 23H2", "Codename": "Moment 4+", "Release": "2023-10-31"},
+    "7600":  {"Name": "Windows 7 RTM", "Codename": "Windows 7", "Release": "2009-10-22"},
+    "7601":  {"Name": "Windows 7 SP1", "Codename": "Windows 7 SP1", "Release": "2011-02-22"},
+    "6000":  {"Name": "Windows Vista RTM", "Codename": "Vista", "Release": "2007-01-30"},
+    "6001":  {"Name": "Windows Vista SP1", "Codename": "Vista SP1", "Release": "2008-03-18"},
+    "6002":  {"Name": "Windows Vista SP2", "Codename": "Vista SP2", "Release": "2009-04-28"},
+    "3790":  {"Name": "Windows Server 2003 / XP x64", "Codename": "Server 2003", "Release": "2003-04-24"},
+    "2600":  {"Name": "Windows XP RTM/SP1/SP2/SP3", "Codename": "Whistler", "Release": "2001-10-25"},
+    "2195":  {"Name": "Windows 2000", "Codename": "Windows 2000", "Release": "2000-02-17"}
+}
 
+# === Common Maps ===
 edition_map = {
-    "UL": "Ultimate", "PR": "Professional", "HO": "Home Premium",
-    "EN": "Enterprise", "BS": "Business", "HB": "Home Basic",
-    "EDU": "Education", "CORE": "Home", "PRO": "Professional",
+    "ULT": "Ultimate", "UL": "Ultimate", "PR": "Professional", "PRO": "Professional",
+    "HO": "Home Premium", "CORE": "Home", "EN": "Enterprise", "EDU": "Education",
+    "HB": "Home Basic", "BS": "Business", "STD": "Standard", "DATACENTER": "Datacenter",
+    "SERVER": "Server"
 }
 
 arch_map = {
-    "X": "x86 (32-bit)", "X86": "x86 (32-bit)", "X64": "x64 (64-bit)",
-    "AMD64": "x64 (64-bit)", "ARM64": "ARM64",
+    "X86": "x86 (32-bit)", "X64": "x64 (64-bit)", "AMD64": "x64 (64-bit)",
+    "ARM64": "ARM64", "IA64": "Itanium (IA-64)", "X": "x86 (32-bit)"
 }
 
 channel_map = {
-    "FRE": "Retail", "CHK": "Debug/Checked", "VOL": "Volume License"
+    "FRE": "Retail", "CHK": "Debug/Checked", "VOL": "Volume License", "OEM": "OEM"
 }
 
-sp_map = {
-    "GSP1": "Service Pack 1", "SP0": "No Service Pack",
-    "SP2": "Service Pack 2", "GDR": "General Distribution Release"
-}
-
-# === Decoding Logic ===
-
-def decode_filename(name: str) -> dict:
-    clean_name = name.upper().replace("-", "_").replace(".", "_")
-    parts = clean_name.split("_")
+# === Decoder ===
+def decode_iso_name(name):
+    clean = name.upper().replace("-", "_").replace(".", "_")
+    parts = clean.split("_")
 
     result = {
         "Raw Filename": name,
-        "Detected OS": None,
+        "OS": None,
+        "Codename": None,
+        "Build": None,
+        "Update Revision": None,
         "Edition": None,
         "Architecture": None,
-        "Service Pack": None,
-        "Language": None,
         "Channel": None,
-        "Build": None,
-        "Notes": [],
+        "Language": None,
+        "Release Date": None,
+        "Notes": []
     }
 
     for part in parts:
-        # OS Identification
-        if part.startswith("GSP"):
-            result["Service Pack"] = sp_map.get(part, "Unknown SP")
-            result["Detected OS"] = "Windows 7"
-        if part.startswith("GRMC"):
-            result["Detected OS"] = "Windows Vista or 7"
-        if "WIN7" in part:
-            result["Detected OS"] = "Windows 7"
-        elif "WIN8" in part:
-            result["Detected OS"] = "Windows 8"
-        elif "WIN10" in part:
-            result["Detected OS"] = "Windows 10"
-        elif "WIN11" in part:
-            result["Detected OS"] = "Windows 11"
+        # Extract major build
+        match = re.match(r"(\d{5})[\.]?(\d{0,5})?", part)
+        if match:
+            base = match.group(1)
+            if base in build_map:
+                b = build_map[base]
+                result["Build"] = base
+                result["OS"] = b["Name"]
+                result["Codename"] = b["Codename"]
+                result["Release Date"] = b["Release"]
+            if match.group(2):
+                result["Update Revision"] = match.group(2)
 
-        # Edition
-        for ed in edition_map:
-            if ed in part:
-                result["Edition"] = edition_map[ed]
+        for k, v in edition_map.items():
+            if k in part:
+                result["Edition"] = v
 
-        # Architecture
-        for arch in arch_map:
-            if arch in part:
-                result["Architecture"] = arch_map[arch]
+        for k, v in arch_map.items():
+            if k in part:
+                result["Architecture"] = v
 
-        # Channel
-        for ch in channel_map:
-            if ch in part:
-                result["Channel"] = channel_map[ch]
+        for k, v in channel_map.items():
+            if k in part:
+                result["Channel"] = v
 
-        # Language
-        if re.match(r"EN(-|_)?US", part):
+        if part.startswith("EN"):
             result["Language"] = "English (US)"
-        elif part == "EN":
-            result["Language"] = "English"
 
-        # Build Numbers
-        if re.match(r"\d{5,6}", part):
-            result["Build"] = part
+        if "EVAL" in part:
+            result["Edition"] = (result["Edition"] or "") + " Evaluation"
 
-    # Fallback guessing
-    if not result["Detected OS"] and "WINDOWS" in clean_name:
-        if "7" in clean_name:
-            result["Detected OS"] = "Windows 7"
-        elif "8" in clean_name:
-            result["Detected OS"] = "Windows 8"
-        elif "10" in clean_name:
-            result["Detected OS"] = "Windows 10"
-        elif "11" in clean_name:
-            result["Detected OS"] = "Windows 11"
+        if part in ["RS1", "RS2", "RS3", "RS4", "RS5"]:
+            result["Codename"] = f"Redstone Series ({part})"
+
+        if part == "REFRESH" or "SVC_REFRESH" in part:
+            result["Notes"].append("Servicing Refresh")
+
+    if not result["OS"] and "WIN" in clean:
+        if "7" in clean:
+            result["OS"] = "Windows 7"
+        elif "8" in clean:
+            result["OS"] = "Windows 8"
+        elif "10" in clean:
+            result["OS"] = "Windows 10"
+        elif "11" in clean:
+            result["OS"] = "Windows 11"
 
     return result
 
-# === Output Formatter ===
-
-def print_result(decoded: dict):
-    for key, value in decoded.items():
-        print(f"{key}: {value if value else 'Unknown'}")
-
-# === Main CLI Entry ===
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Decode any Windows ISO filename into a human-readable format")
+# === CLI ===
+def main():
+    parser = argparse.ArgumentParser(description="Decode ANY Windows ISO filename into a human-readable form")
     parser.add_argument("filename", help="The ISO filename to decode")
     args = parser.parse_args()
 
-    result = decode_filename(args.filename)
-    print_result(result)
+    decoded = decode_iso_name(args.filename)
+    for key, value in decoded.items():
+        if isinstance(value, list):
+            value = ", ".join(value) if value else "None"
+        print(f"{key}: {value if value else 'Unknown'}")
+
+if __name__ == "__main__":
+    main()
